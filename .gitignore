@@ -1,0 +1,73 @@
+# JWT keys
+/keys
+/ssl
+
+# misc
+.DS_Store
+*.pem
+*.key
+*.crt
+
+# === Go (Golang) ===
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Direktori dependensi (Go Modules)
+# Sangat disarankan untuk tidak memasukkan vendor ke git
+vendor/
+
+# Output hasil Test dan Coverage
+*.test
+*.out
+coverage.out
+coverage.txt
+profile.out
+
+# Direktori build (opsional, tapi praktik yang baik)
+bin/
+build/
+_output/
+
+# === Docker ===
+# File environment lokal
+# JANGAN PERNAH commit file .env!
+.env
+.env.*
+!.env.example
+
+# File override Docker Compose untuk development lokal
+docker-compose.override.yml
+docker-compose.local.yml
+docker-compose.yml
+
+kong.yml
+
+# File konteks Docker
+.docker/
+
+# Log dan data yang dihasilkan secara lokal
+logs/
+*.log
+data/
+
+
+# === IDE & Editor ===
+# JetBrains (GoLand, IntelliJ, dll.)
+.idea/
+*.iml
+
+# Visual Studio Code
+.vscode/
+
+# === File Sistem Operasi ===
+# macOS
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini

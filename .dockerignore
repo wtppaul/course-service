@@ -1,0 +1,64 @@
+# === Aturan Penting & Sensitif ===
+# Abaikan seluruh direktori .git (sangat penting untuk keamanan!)
+.git/
+
+# Abaikan file environment lokal (JANGAN PERNAH masukkan .env ke image)
+.env
+.env.*
+!.env.example
+*.env.local
+
+# Abaikan file konfigurasi Git
+.gitignore
+.gitattributes
+.gitmodules
+
+# Abaikan file Docker itu sendiri (ini tidak perlu disalin KE DALAM image)
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.override.yml
+docker-compose.local.yml
+
+# === Direktori Dependensi ===
+# Direktori ini harus diinstal DI DALAM Dockerfile, bukan disalin dari lokal
+node_modules/
+vendor/
+.venv/
+venv/
+env/
+__pycache__/
+target/
+dist/
+build/
+coverage/
+
+# === Log & File Sementara ===
+logs/
+*.log
+npm-debug.log*
+yarn-error.log
+*.patch
+*.diff
+*.swp
+*.swo
+*~
+
+# === File Sistem Operasi ===
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# === IDE & Editor ===
+# Visual Studio Code
+.vscode/
+
+# JetBrains (GoLand, IntelliJ, PyCharm, dll.)
+.idea/
+*.iml
