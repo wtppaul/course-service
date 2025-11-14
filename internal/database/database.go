@@ -8,7 +8,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	"github.com/wtppaul/auth-go/internal/model"
+	"github.com/wtppaul/course-service/internal/models"
 )
 
 var DB *gorm.DB
@@ -44,13 +44,13 @@ func InitDB() {
 	// 🎈 5. Auto migrate all models
 	fmt.Println("Running migrations...")
 	if err := db.AutoMigrate(
-		&model.Course{},
-		&model.Chapter{},
-		&model.Lesson{},
-		&model.Category{},
-		&model.Tag{},
-		&model.Sale{},
-		&model.Coupon{},
+		&models.Course{},
+		&models.Chapter{},
+		&models.Lesson{},
+		&models.Category{},
+		&models.Tag{},
+		&models.Sale{},
+		&models.Coupon{},
 	); err != nil {
 		log.Fatalf("❌ Migration failed: %v", err)
 	}

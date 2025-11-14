@@ -25,16 +25,8 @@ func main() {
 	config.Load()
 	
 	// 2️⃣ Setup database & redis
-	db, err := database.InitDB()
-	if err != nil {
-		log.Fatalf("Gagal terhubung ke database: %v", err)
-	}
-	log.Println("Database berhasil terhubung.")
-
-	if err := redis.InitRedis(); err != nil {
-		log.Fatalf("Gagal terhubung ke Redis: %v", err)
-	}
-	log.Println("Redis berhasil terhubung.")
+	database.InitDB()
+	redis.InitRedis()
 
 	// 3️⃣ Hapus Inisialisasi WebAuthn (Tidak relevan)
 
@@ -45,7 +37,7 @@ func main() {
 	// 5️⃣ Setup handlers & services (Versi Course-service)
 	
 	// A. Inisialisasi Repository (Dependensi: Database)
-	courseRepo := repository.NewCourseRepository(db)
+	courseRepo := repository.NewCourseRepository(database.DB)
 
 	// B. Inisialisasi Handler (Dependensi: Repository)
 	courseHandler := handler.NewCourseHandler(courseRepo)

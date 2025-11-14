@@ -24,19 +24,32 @@ type UpdateCourseInput struct {
 	// (Tambahkan CategoryIDs, TagIDs jika Anda ingin mengizinkan pembaruan di sini)
 }
 
+type CourseFilters struct {
+	Status    		[]string // ["PUBLISHED", "APPROVED", .....])
+	Level     		[]string 
+	CategorySlugs []string 
+	TagSlugs      []string 
+	TeacherID 		uuid.UUID
+	Page      		int
+	Limit     		int
+}
+
 type ICourseRepository interface {
 	// Operasi untuk Teacher/Admin
 	CreateCourse(ctx context.Context, course *models.Course) error
-	UpdateCourse(ctx context.Context, courseID uuid.UUID, input UpdateCourseInput) (*models.Course, error)
-	UpdateCourseStatus(ctx context.Context, courseID uuid.UUID, newStatus models.CourseStatus) error
 	CreateChapter(ctx context.Context, chapter *models.Chapter) error
 	CreateLesson(ctx context.Context, lesson *models.Lesson) error
-	
+	CreateChapter(ctx context.Context, chapter *models.Chapter) error 
+	UpdateCourse(ctx context.Context, courseID uuid.UUID, input UpdateCourseInput) (*models.Course, error)
+	UpdateCourseStatus(ctx context.Context, courseID uuid.UUID, newStatus models.CourseStatus) error
+	UpdateCourseTags(ctx context.Context, courseID uuid.UUID, tagIDs []uuid.UUID) error
+
 	// Operasi untuk Publik/User (via BFF)
 	GetCourseBySlug(ctx context.Context, slug string) (*models.Course, error) // Ini yang kita perbaiki
 	GetPublishedCourses(ctx context.Context, page, limit int) ([]*models.Course, error)
 	GetCourseDetails(ctx context.Context, courseID uuid.UUID) (*models.Course, error) // Mirip dengan Slug, tapi by ID
 	GetCoursesByTeacherID(ctx context.Context, teacherID uuid.UUID) ([]*models.Course, error)
+	GetCourses(ctx context.Context, filters CourseFilters) ([]*models.Course, int64, error)
 	
 	// Operasi untuk Pricing (dipanggil oleh Payment-service)
 	FindValidCoupon(ctx context.Context, code string) (*models.Coupon, error)
@@ -56,45 +69,6 @@ func NewCourseRepository(db *gorm.DB) ICourseRepository {
 
 // --- Implementasi Fungsi ---
 
-// ✅ IMPLEMENTASI FUNGSI BARU
-// FindOrCreateTeacherByAuthID menukar "Paspor" (AuthID) dengan "Profil" (Teacher)
-// Ini adalah jantung dari sinkronisasi data microservice.
-func (r *courseRepository) FindOrCreateTeacherByAuthID(ctx context.Context, authID string) (*models.Teacher, error) {
-	var teacher models.Teacher
-	
-	// 1. Coba temukan teacher berdasarkan AuthID (Paspor)
-	err := r.db.WithContext(ctx).Where("auth_id = ?", authID).First(&teacher).Error
-	
-	if err == nil {
-		// Ditemukan, kembalikan profil yang ada
-		return &teacher, nil
-	}
-
-	// 2. Jika tidak ditemukan (gorm.ErrRecordNotFound)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		// Buat profil teacher baru.
-		// CATATAN: Kita tidak tahu 'Name' atau 'Username' teacher.
-		// BFF (App-service) harus bertanggung jawab untuk memanggil
-		// endpoint lain (misal: PATCH /internal/teachers/sync-profile)
-		// untuk mengisi data ini nanti.
-		newTeacher := models.Teacher{
-			AuthID:   authID,
-			Name:     "New Teacher", // Nama sementara
-			Username: "user-" + uuid.NewString()[:8], // Username unik sementara
-		}
-
-		// Simpan teacher baru
-		if err := r.db.WithContext(ctx).Create(&newTeacher).Error; err != nil {
-			return nil, err // Gagal membuat profil baru
-		}
-		
-		// Kembalikan profil yang baru dibuat
-		return &newTeacher, nil
-	}
-
-	// 3. Jika terjadi error database lain
-	return nil, err
-}
 
 func (r *courseRepository) CreateCourse(ctx context.Context, course *models.Course) error {
 	return r.db.WithContext(ctx).Create(course).Error
@@ -126,7 +100,6 @@ func (r *courseRepository) UpdateCourse(ctx context.Context, courseID uuid.UUID,
 	return &course, nil
 }
 
-
 func (r *courseRepository) UpdateCourseStatus(ctx context.Context, courseID uuid.UUID, newStatus models.CourseStatus) error {
 	return r.db.WithContext(ctx).
 		Model(&models.Course{}).
@@ -143,22 +116,6 @@ func (r *courseRepository) CreateChapter(ctx context.Context, chapter *models.Ch
 
 func (r *courseRepository) CreateLesson(ctx context.Context, lesson *models.Lesson) error {
 	return r.db.WithContext(ctx).Create(lesson).Error
-}
-
-// IsSlugInUse memeriksa apakah slug sudah ada di database
-func (r *courseRepository) IsSlugInUse(ctx context.Context, slug string) (bool, error) {
-	var count int64
-	// Gunakan query COUNT() yang sangat cepat
-	err := r.db.WithContext(ctx).
-		Model(&models.Course{}).
-		Where("slug = ?", slug).
-		Count(&count).Error
-
-	if err != nil {
-		return false, err
-	}
-	
-	return count > 0, nil
 }
 
 // ✅
@@ -305,4 +262,113 @@ func (r *courseRepository) GetActiveSalesForCourse(ctx context.Context, courseID
 		Find(&sales).Error
 
 	return sales, err
+}
+
+// ✅
+// GetCourses secara dinamis memfilter dan melakukan paginasi kursus
+func (r *courseRepository) GetCourses(ctx context.Context, filters CourseFilters) ([]*models.Course, int64, error) {
+	var courses []*models.Course
+	var total int64
+
+	// Mulai query
+	query := r.db.WithContext(ctx).Model(&models.Course{})
+	countQuery := r.db.WithContext(ctx).Model(&models.Course{})
+
+	// --- Terapkan Filter ---
+	if len(filters.Status) > 0 {
+		query = query.Where("status IN (?)", filters.Status)
+		countQuery = countQuery.Where("status IN (?)", filters.Status)
+	}
+
+	if len(filters.Level) > 0 {
+		query = query.Where("level IN (?)", filters.Level)
+		countQuery = countQuery.Where("level IN (?)", filters.Level)
+	}
+
+	if filters.TeacherID != uuid.Nil {
+		query = query.Where("teacher_id = ?", filters.TeacherID)
+		countQuery = countQuery.Where("teacher_id = ?", filters.TeacherID)
+	}
+
+	// ✅ --- FILTER BARU UNTUK KATEGORI (via JOIN) ---
+	if len(filters.CategorySlugs) > 0 {
+		// Kita perlu JOIN ke tabel 'categories' melalui tabel 'course_categories'
+		query = query.Joins(
+			"JOIN course_categories cc ON cc.course_id = courses.id").
+			Joins("JOIN categories cat ON cat.id = cc.category_id").
+			Where("cat.slug IN (?)", filters.CategorySlugs)
+		
+		countQuery = countQuery.Joins(
+			"JOIN course_categories cc ON cc.course_id = courses.id").
+			Joins("JOIN categories cat ON cat.id = cc.category_id").
+			Where("cat.slug IN (?)", filters.CategorySlugs)
+	}
+
+	// ✅ --- FILTER BARU UNTUK TAG (via JOIN) ---
+	if len(filters.TagSlugs) > 0 {
+		query = query.Joins(
+			"JOIN course_tags ct ON ct.course_id = courses.id").
+			Joins("JOIN tags t ON t.id = ct.tag_id").
+			Where("t.slug IN (?)", filters.TagSlugs)
+			
+		countQuery = countQuery.Joins(
+			"JOIN course_tags ct ON ct.course_id = courses.id").
+			Joins("JOIN tags t ON t.id = ct.tag_id").
+			Where("t.slug IN (?)", filters.TagSlugs)
+	}
+
+	// --- Hitung Total (sebelum Paginasi) ---
+	if err := countQuery.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if total == 0 {
+		return []*models.Course{}, 0, nil // Kembalikan array kosong jika tidak ada hasil
+	}
+
+	// --- Terapkan Paginasi & Urutan ---
+	offset := (filters.Page - 1) * filters.Limit
+	query = query.Order("created_at DESC").
+		Offset(offset).
+		Limit(filters.Limit)
+
+	// --- Preload Relasi (Hanya yang ringan untuk list) ---
+	query = query.Preload("Teacher", func(db *gorm.DB) *gorm.DB {
+		return db.Select("id, name, username") // Hanya pilih data yg perlu
+	}).Preload("Categories")
+
+	// --- Eksekusi Query ---
+	if err := query.Find(&courses).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return courses, total, nil
+}
+
+// ✅
+func (r *courseRepository) UpdateCourseTags(ctx context.Context, courseID uuid.UUID, tagIDs []uuid.UUID) error {
+	// GORM memiliki cara elegan untuk mengganti relasi many-to-many
+	// menggunakan .Association(...).Replace(...)
+	
+	var course models.Course
+	course.ID = courseID
+	
+	// 1. Buat slice dari struct Tag hanya dengan ID
+	//    (Ini diperlukan GORM untuk .Replace)
+	var tags []models.Tag
+	for _, id := range tagIDs {
+		tags = append(tags, models.Tag{ID: id})
+	}
+
+	// 2. Ganti semua relasi yang ada di tabel 'course_tags'
+	//    untuk courseID ini dengan daftar tag yang baru.
+	//    GORM akan menangani (DELETE lama) + (INSERT baru)
+	//    secara transaksional.
+	return r.db.WithContext(ctx).Model(&course).Association("Tags").Replace(tags)
+}
+
+// ✅
+func (r *courseRepository) CreateChapter(ctx context.Context, chapter *models.Chapter) error {
+	// ('chapter.ID' dan 'chapter.Slug' harus sudah di-set oleh handler)
+	return r.db.WithContext(ctx).Create(chapter).Error
 }
