@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 	"errors"
+	"fmt" 
 
 	"gorm.io/gorm"
 	"github.com/google/uuid"
@@ -35,14 +36,24 @@ type CourseFilters struct {
 }
 
 type ICourseRepository interface {
-	// Operasi untuk Teacher/Admin
+
+	// --- FUNGSI COURSE ---
 	CreateCourse(ctx context.Context, course *models.Course) error
-	CreateChapter(ctx context.Context, chapter *models.Chapter) error
-	CreateLesson(ctx context.Context, lesson *models.Lesson) error
-	CreateChapter(ctx context.Context, chapter *models.Chapter) error 
 	UpdateCourse(ctx context.Context, courseID uuid.UUID, input UpdateCourseInput) (*models.Course, error)
-	UpdateCourseStatus(ctx context.Context, courseID uuid.UUID, newStatus models.CourseStatus) error
 	UpdateCourseTags(ctx context.Context, courseID uuid.UUID, tagIDs []uuid.UUID) error
+	UpdateCourseStatus(ctx context.Context, courseID uuid.UUID, newStatus models.CourseStatus) error
+	
+	// --- FUNGSI CHAPTER ---
+	CreateChapter(ctx context.Context, chapter *models.Chapter) error
+	GetChapterByID(ctx context.Context, chapterID uuid.UUID) (*models.Chapter, error)    
+	UpdateChapter(ctx context.Context, chapter *models.Chapter) (*models.Chapter, error)
+	ReorderChapters(ctx context.Context, courseID uuid.UUID, updates []ChapterReorderInput) error // ✅ BARU
+	DeleteChapter(ctx context.Context, courseID uuid.UUID, chapterID uuid.UUID) error // ✅ BARU
+
+		// --- FUNGSI LESSON ---
+	CreateLesson(ctx context.Context, lesson *models.Lesson) error
+	UpdateLesson(ctx context.Context, lesson *models.Lesson) (*models.Lesson, error) // ✅ BARU
+	GetLessonByID(ctx context.Context, lessonID uuid.UUID) (*models.Lesson, error)    // ✅ BARU
 
 	// Operasi untuk Publik/User (via BFF)
 	GetCourseBySlug(ctx context.Context, slug string) (*models.Course, error) // Ini yang kita perbaiki
@@ -371,4 +382,129 @@ func (r *courseRepository) UpdateCourseTags(ctx context.Context, courseID uuid.U
 func (r *courseRepository) CreateChapter(ctx context.Context, chapter *models.Chapter) error {
 	// ('chapter.ID' dan 'chapter.Slug' harus sudah di-set oleh handler)
 	return r.db.WithContext(ctx).Create(chapter).Error
+}
+
+// ✅
+// GetChapterByID mengambil satu bab
+func (r *courseRepository) GetChapterByID(ctx context.Context, chapterID uuid.UUID) (*models.Chapter, error) {
+	var chapter models.Chapter
+	err := r.db.WithContext(ctx).Where("id = ?", chapterID).First(&chapter).Error
+	if err != nil {
+		return nil, err // Akan GORM.ErrRecordNotFound jika tidak ada
+	}
+	return &chapter, nil
+}
+
+// ✅
+// UpdateChapter memperbarui data bab
+func (r *courseRepository) UpdateChapter(ctx context.Context, chapter *models.Chapter) (*models.Chapter, error) {
+	// Gunakan .Save() untuk memperbarui semua field,
+	// atau .Model() & .Updates() untuk field spesifik
+	err := r.db.WithContext(ctx).Save(chapter).Error
+	if err != nil {
+		return nil, err
+	}
+	return chapter, nil
+}
+
+// ✅ 
+// ReorderChapters menjalankan batch update dalam satu transaksi
+func (r *courseRepository) ReorderChapters(ctx context.Context, courseID uuid.UUID, updates []ChapterReorderInput) error {
+	// Memulai transaksi
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		
+		for _, item := range updates {
+			// Menjalankan update di dalam transaksi
+			// Kita juga memverifikasi 'course_id' untuk keamanan ekstra,
+			// memastikan chapter yang di-update milik kursus yang benar.
+			result := tx.Model(&models.Chapter{}).
+				Where("id = ? AND course_id = ?", item.ID, courseID).
+				Update("order", item.Order)
+
+			if result.Error != nil {
+				// Jika satu update gagal, seluruh transaksi di-rollback
+				return result.Error
+			}
+			
+			if result.RowsAffected == 0 {
+				// Ini terjadi jika chapterId tidak ada ATAU tidak cocok dengan courseId
+				// Kita batalkan transaksi untuk mencegah update parsial.
+				return errors.New(
+					fmt.Sprintf("Reorder failed: Chapter ID %s not found or does not belong to course ID %s", item.ID, courseID),
+				)
+			}
+		}
+
+		// Jika semua loop berhasil, commit transaksi
+		return nil
+	})
+}
+
+
+// ✅ IMPLEMENTASI BARU
+// DeleteChapter menghapus chapter dan semua lesson di dalamnya (transaksional)
+func (r *courseRepository) DeleteChapter(ctx context.Context, courseID uuid.UUID, chapterID uuid.UUID) error {
+	// Memulai transaksi
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		
+		// 1. Pastikan chapter ini milik course yang benar
+		//    (Ini juga berfungsi sebagai cek kepemilikan)
+		var chapter models.Chapter
+		if err := tx.Where("id = ? AND course_id = ?", chapterID, courseID).First(&chapter).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("chapter not found or does not belong to this course")
+			}
+			return err // Error DB lain
+		}
+
+		// 2. Hapus semua lesson di dalam chapter ini
+		//    (Sangat penting untuk menghindari data yatim piatu)
+		if err := tx.Where("chapter_id = ?", chapterID).Delete(&models.Lesson{}).Error; err != nil {
+			return err // Rollback jika gagal hapus lessons
+		}
+
+		// 3. Hapus chapter itu sendiri
+		if err := tx.Where("id = ?", chapterID).Delete(&models.Chapter{}).Error; err != nil {
+			return err // Rollback jika gagal hapus chapter
+		}
+
+		// 4. Commit transaksi
+		return nil
+	})
+}
+
+
+// ✅
+// CreateLesson membuat lesson baru
+func (r *courseRepository) CreateLesson(ctx context.Context, lesson *models.Lesson) error {
+	return r.db.WithContext(ctx).Create(lesson).Error
+}
+
+
+// ✅
+// GetLessonByID mengambil satu lesson berdasarkan ID
+func (r *courseRepository) GetLessonByID(ctx context.Context, lessonID uuid.UUID) (*models.Lesson, error) {
+	var lesson models.Lesson
+	// Kita juga 'Join' untuk mendapatkan courseId, untuk validasi
+	err := r.db.WithContext(ctx).
+		Joins("JOIN chapters ON chapters.id = lessons.chapter_id").
+		Select("lessons.*, chapters.course_id").
+		Where("lessons.id = ?", lessonID).
+		First(&lesson).Error
+		
+	if err != nil {
+		return nil, err // Akan GORM.ErrRecordNotFound jika tidak ada
+	}
+	return &lesson, nil
+}
+
+// ✅
+// UpdateLesson memperbarui data lesson
+func (r *courseRepository) UpdateLesson(ctx context.Context, lesson *models.Lesson) (*models.Lesson, error) {
+	// Gunakan .Save() untuk memperbarui semua field
+	err := r.db.WithContext(ctx).Save(lesson).Error
+	if err != nil {
+		return nil, err
+	}
+	return lesson, nil
 }
